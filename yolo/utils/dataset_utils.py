@@ -101,17 +101,23 @@ def scale_segmentation(
     h, w = image_dimensions["height"], image_dimensions["width"]
     for anno in annotations:
         category_id = anno["category_id"]
-        if "segmentation" in anno:
+        seg_list = []
+        
+        # Check if segmentation exists and is non-empty
+        if "segmentation" in anno and anno["segmentation"] and any(anno["segmentation"]):
             seg_list = [item for sublist in anno["segmentation"] for item in sublist]
+        # Fall back to bbox if segmentation is empty or doesn't exist
         elif "bbox" in anno:
             x, y, width, height = anno["bbox"]
             seg_list = [x, y, x + width, y, x + width, y + height, x, y + height]
 
-        scaled_seg_data = (
-            np.array(seg_list).reshape(-1, 2) / [w, h]
-        ).tolist()  # make the list group in x, y pairs and scaled with image width, height
-        scaled_flat_seg_data = [category_id] + list(chain(*scaled_seg_data))  # flatten the scaled_seg_data list
-        seg_array_with_cat.append(scaled_flat_seg_data)
+        # Only proceed if we have valid segmentation data
+        if seg_list:
+            scaled_seg_data = (
+                np.array(seg_list).reshape(-1, 2) / [w, h]
+            ).tolist()  # make the list group in x, y pairs and scaled with image width, height
+            scaled_flat_seg_data = [category_id] + list(chain(*scaled_seg_data))  # flatten the scaled_seg_data list
+            seg_array_with_cat.append(scaled_flat_seg_data)
 
     return seg_array_with_cat
 
