@@ -22,7 +22,7 @@ def locate_label_paths(dataset_path: Path, phase_name: Path) -> Tuple[Path, Path
     Returns:
         Tuple[Path, Path]: A tuple containing the path to the labels file and the file format ("json" or "txt").
     """
-    json_labels_path = dataset_path / "annotations" / f"instances_{phase_name}.json"
+    json_labels_path = dataset_path / "annotations" / f"{phase_name}.json"
 
     txt_labels_path = dataset_path / "labels" / phase_name
 
