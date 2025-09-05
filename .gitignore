@@ -148,3 +148,8 @@ node_modules/
 
 # Not ignore image for demo
 !demo/images/*/*.png
+
+# Claude Code
+.serena/*
+CLAUDE.md
+.mcp.json
