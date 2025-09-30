@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
-YOLOv9 ONNX Export Script for current repository
+YOLOv9 ONNX Export Script
+
+Export YOLOv9 models to ONNX format with or without NMS.
+Supports flexible configuration via command-line arguments.
 """
+
+import argparse
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -11,14 +17,10 @@ from yolo.model.yolo import create_model
 from yolo.utils.bounding_box_utils import create_converter
 from yolo.utils.model_utils import PostProcess
 
-# Configuration
-NUM_CLASSES = 2  # mitococa_v9は2クラス（person, head）
-CKPT_PATH = "runs/train/mitococa_v9_10epoch/best-epoch=09-map=0.3239.ckpt"
-MODEL_NAME = "v9-s"  # 使用したモデル名（overrides.yamlより確認）
-EXPORT_ONNX_FILE = "yolov9_full.onnx"
-
 
 class FullYoloExport(nn.Module):
+    """YOLO Export with NMS included"""
+
     def __init__(self, model, cfg):
         super().__init__()
         self.model = model.eval()
@@ -75,7 +77,8 @@ class RawYoloExport(nn.Module):
             return pred_class, pred_bbox
 
 
-def export_full_onnx():
+def export_full_onnx(ckpt_path, model_name, num_classes, output_file, opset_version=17):
+    """Export ONNX model with NMS included"""
     print("🚀 ONNX変換を開始 (NMS込み)...")
 
     try:
@@ -86,11 +89,11 @@ def export_full_onnx():
                 config_name="config.yaml",
                 overrides=[
                     "task=inference",
-                    f"model={MODEL_NAME}",
-                    f"dataset.class_num={NUM_CLASSES}",
+                    f"model={model_name}",
+                    f"dataset.class_num={num_classes}",
                 ],
             )
-        print(f"✅ 設定読み込み完了 (モデル: {MODEL_NAME}, クラス数: {NUM_CLASSES})")
+        print(f"✅ 設定読み込み完了 (モデル: {model_name}, クラス数: {num_classes})")
         print(f"   - 画像サイズ: {cfg.task.data.image_size}")
         print(
             f"   - NMS設定: min_confidence={cfg.task.nms.min_confidence}, min_iou={cfg.task.nms.min_iou}"
@@ -98,12 +101,12 @@ def export_full_onnx():
 
         # 2. モデル作成
         print("🏗️ モデルを作成中...")
-        model = create_model(cfg.model, class_num=NUM_CLASSES)
+        model = create_model(cfg.model, class_num=num_classes)
         print("✅ モデル作成完了")
 
         # 3. チェックポイント読み込み
-        print(f"📦 チェックポイントを読み込み中: {CKPT_PATH}")
-        ckpt = torch.load(CKPT_PATH, map_location="cpu")
+        print(f"📦 チェックポイントを読み込み中: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location="cpu")
         state_dict = ckpt["state_dict"]
 
         # Lightning形式のキー名変換 (model.model.* → model.*)
@@ -135,22 +138,21 @@ def export_full_onnx():
         print(f"✅ ダミー入力作成完了 (サイズ: {dummy_input.shape})")
 
         # 6. ONNX Export
-        print(f"🔄 ONNX変換中: {EXPORT_ONNX_FILE}")
+        print(f"🔄 ONNX変換中: {output_file}")
         torch.onnx.export(
             wrapper,
             dummy_input,
-            EXPORT_ONNX_FILE,
-            opset_version=20,
-            # dynamo=True,
+            output_file,
+            opset_version=opset_version,
             input_names=["input"],
             output_names=["output"],
             dynamic_axes={
                 "input": {0: "batch"},
             },
-            verbose=False,  # 詳細ログを非表示
+            verbose=False,
         )
 
-        print(f"🎉 ONNX変換完了: {EXPORT_ONNX_FILE}")
+        print(f"🎉 ONNX変換完了: {output_file}")
 
     except Exception as e:
         print(f"❌ エラーが発生しました: {e}")
@@ -159,8 +161,8 @@ def export_full_onnx():
         traceback.print_exc()
 
 
-def export_raw_onnx():
-    """Export ONNX without NMS for flexible post-processing"""
+def export_raw_onnx(ckpt_path, model_name, num_classes, output_file, opset_version=17):
+    """Export ONNX model without NMS for flexible post-processing"""
     print("🚀 ONNX変換を開始 (NMS無し)...")
 
     try:
@@ -171,21 +173,21 @@ def export_raw_onnx():
                 config_name="config.yaml",
                 overrides=[
                     "task=inference",
-                    f"model={MODEL_NAME}",
-                    f"dataset.class_num={NUM_CLASSES}",
+                    f"model={model_name}",
+                    f"dataset.class_num={num_classes}",
                 ],
             )
-        print(f"✅ 設定読み込み完了 (モデル: {MODEL_NAME}, クラス数: {NUM_CLASSES})")
+        print(f"✅ 設定読み込み完了 (モデル: {model_name}, クラス数: {num_classes})")
         print(f"   - 画像サイズ: {cfg.task.data.image_size}")
 
         # 2. モデル作成
         print("🏗️ モデルを作成中...")
-        model = create_model(cfg.model, class_num=NUM_CLASSES)
+        model = create_model(cfg.model, class_num=num_classes)
         print("✅ モデル作成完了")
 
         # 3. チェックポイント読み込み
-        print(f"📦 チェックポイントを読み込み中: {CKPT_PATH}")
-        ckpt = torch.load(CKPT_PATH, map_location="cpu")
+        print(f"📦 チェックポイントを読み込み中: {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location="cpu")
         state_dict = ckpt["state_dict"]
 
         # Lightning形式のキー名変換 (model.model.* → model.*)
@@ -234,13 +236,12 @@ def export_raw_onnx():
                     output_names = ["pred_class", "pred_bbox"]
 
         # 7. ONNX Export
-        output_file = EXPORT_ONNX_FILE.replace(".onnx", "_raw.onnx")
         print(f"🔄 ONNX変換中: {output_file}")
         torch.onnx.export(
             wrapper,
             dummy_input,
             output_file,
-            opset_version=20,
+            opset_version=opset_version,
             input_names=["input"],
             output_names=output_names,
             dynamic_axes={
@@ -261,19 +262,101 @@ def export_raw_onnx():
         traceback.print_exc()
 
 
-if __name__ == "__main__":
-    import argparse
+def main():
+    parser = argparse.ArgumentParser(
+        description="YOLOv9 ONNX Export",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Export with NMS (full mode)
+  python -m yolo.tools.onnx_export --checkpoint runs/train/exp/best.ckpt --model-name v9-s --num-classes 2
 
-    parser = argparse.ArgumentParser(description="YOLOv9 ONNX Export")
+  # Export without NMS (raw mode)
+  python -m yolo.tools.onnx_export -p runs/train/exp/best.ckpt -m v9-s -n 2 --mode raw
+
+  # Custom output and opset version
+  python -m yolo.tools.onnx_export -p best.ckpt -m v9-c -n 80 -o model.onnx --opset-version 17
+""",
+    )
+
+    parser.add_argument(
+        "--checkpoint",
+        "-p",
+        type=str,
+        required=True,
+        help="Path to checkpoint file (.ckpt)",
+    )
+    parser.add_argument(
+        "--model-name",
+        "-m",
+        type=str,
+        required=True,
+        help="Model name (e.g., v9-s, v9-c, v9-m)",
+    )
+    parser.add_argument(
+        "--num-classes",
+        "-n",
+        type=int,
+        required=True,
+        help="Number of classes",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        default=None,
+        help="Output ONNX file path (default: auto-generated based on mode)",
+    )
     parser.add_argument(
         "--mode",
         choices=["full", "raw"],
         default="full",
-        help="Export mode: 'full' (with NMS) or 'raw' (without NMS)",
+        help="Export mode: 'full' (with NMS) or 'raw' (without NMS) [default: full]",
     )
+    parser.add_argument(
+        "--opset-version",
+        type=int,
+        default=17,
+        help="ONNX opset version [default: 17]",
+    )
+
     args = parser.parse_args()
 
+    # Generate output filename if not specified
+    if args.output is None:
+        checkpoint_name = Path(args.checkpoint).stem
+        suffix = "_raw" if args.mode == "raw" else "_full"
+        args.output = f"{checkpoint_name}{suffix}.onnx"
+
+    print(f"{'='*60}")
+    print(f"YOLOv9 ONNX Export")
+    print(f"{'='*60}")
+    print(f"Checkpoint: {args.checkpoint}")
+    print(f"Model: {args.model_name}")
+    print(f"Classes: {args.num_classes}")
+    print(f"Mode: {args.mode}")
+    print(f"Output: {args.output}")
+    print(f"ONNX Opset: {args.opset_version}")
+    print(f"{'='*60}\n")
+
+    # Export based on mode
     if args.mode == "full":
-        export_full_onnx()
+        export_full_onnx(
+            args.checkpoint,
+            args.model_name,
+            args.num_classes,
+            args.output,
+            args.opset_version,
+        )
     else:
-        export_raw_onnx()
+        export_raw_onnx(
+            args.checkpoint,
+            args.model_name,
+            args.num_classes,
+            args.output,
+            args.opset_version,
+        )
+
+
+if __name__ == "__main__":
+    main()

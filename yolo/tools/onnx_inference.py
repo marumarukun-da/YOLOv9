@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-YOLOv9 ONNX Inference Script for current repository
-Supports inference using exported ONNX model with or without NMS.
+YOLOv9 ONNX Inference Script
+
+Run inference on images using exported ONNX models (with or without NMS).
+Supports flexible configuration via command-line arguments.
 """
 
 import argparse
@@ -13,17 +15,11 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 
-# Configuration - このリポジトリに合わせて設定
-ONNX_PATH = "yolov9_full.onnx"
-ONNX_RAW_PATH = "yolov9_full_raw.onnx"  # NMS無しモデル
-IMG_SIZE = 640  # 変換時と同じサイズ
-CLASS_LIST = ["person", "head"]  # mitococa_v9の2クラス
-DEFAULT_IMAGE_PATH = "dataset/mitococa_v9/images/val"  # デフォルト画像パス
-
-# NMS Parameters (for raw mode)
+# Default NMS Parameters
 DEFAULT_MIN_CONFIDENCE = 0.25
 DEFAULT_MIN_IOU = 0.45
 DEFAULT_MAX_BBOX = 300
+DEFAULT_IMG_SIZE = 640
 
 
 def apply_nms(
@@ -117,14 +113,15 @@ def apply_nms(
     return all_detections
 
 
-def letterbox(pil_img, size=IMG_SIZE, color=(114, 114, 114)):
+def letterbox(pil_img, size, color=(114, 114, 114)):
     """
-    Resize the image with aspect ratio preserved and pad to square (same as training).
+    Resize the image with aspect ratio preserved and pad to square.
+
     Returns:
-    - padded PIL.Image (size×size)
-    - r float: scaling ratio
-    - pad_w int : width padding (left-right)
-    - pad_h int : height padding (top-bottom)
+        - padded PIL.Image (size×size)
+        - r float: scaling ratio
+        - pad_w int: width padding (left-right)
+        - pad_h int: height padding (top-bottom)
     """
     w0, h0 = pil_img.size
     r = min(size / w0, size / h0)
@@ -151,18 +148,22 @@ def get_image_list(path_str):
         raise FileNotFoundError(f"Path not found: {path_str}")
 
 
-def test_onnx_model(onnx_path, is_raw=False):
+def test_onnx_model(onnx_path, img_size, mode=None):
     """
-    段階的テスト: ONNXモデルの基本動作確認
+    Test ONNX model and auto-detect mode if not specified
 
     Args:
         onnx_path: Path to ONNX model
-        is_raw: True if model outputs raw predictions (without NMS)
+        img_size: Input image size
+        mode: 'full' or 'raw', auto-detect if None
+
+    Returns:
+        (session, input_name, is_raw)
     """
     print("🧪 ONNX推論テスト開始...")
 
     try:
-        # 1. ONNXファイル存在確認
+        # 1. Check ONNX file exists
         print(f"📦 ONNXファイル確認: {onnx_path}")
         if not Path(onnx_path).exists():
             raise FileNotFoundError(f"ONNXファイルが見つかりません: {onnx_path}")
@@ -171,7 +172,7 @@ def test_onnx_model(onnx_path, is_raw=False):
             f"✅ ONNXファイル存在確認 (サイズ: {Path(onnx_path).stat().st_size / 1024 / 1024:.1f}MB)"
         )
 
-        # 2. ONNXRuntimeセッション作成
+        # 2. Create ONNX Runtime session
         print("🔧 ONNXRuntimeセッション作成...")
         providers = (
             ["CUDAExecutionProvider"]
@@ -182,7 +183,7 @@ def test_onnx_model(onnx_path, is_raw=False):
 
         sess = ort.InferenceSession(onnx_path, providers=providers)
 
-        # 3. モデルの入出力情報確認
+        # 3. Get model input/output info
         print("📊 モデル情報:")
         inp_name = sess.get_inputs()[0].name
         inp_shape = sess.get_inputs()[0].shape
@@ -190,14 +191,21 @@ def test_onnx_model(onnx_path, is_raw=False):
         print(f"   - 入力名: {inp_name}")
         print(f"   - 入力形状: {inp_shape}")
 
-        output_names = []
+        num_outputs = len(sess.get_outputs())
         for i, out in enumerate(sess.get_outputs()):
             print(f"   - 出力{i}: {out.name}, 形状: {out.shape}")
-            output_names.append(out.name)
 
-        # 4. ダミー入力でテスト推論
+        # 4. Auto-detect mode if not specified
+        if mode is None:
+            is_raw = num_outputs > 1
+            mode_detected = "raw" if is_raw else "full"
+            print(f"   - モード自動検出: {mode_detected} ({num_outputs}個の出力)")
+        else:
+            is_raw = mode == "raw"
+
+        # 5. Test inference with dummy input
         print("🔄 ダミー入力でテスト推論...")
-        dummy_input = np.random.rand(1, 3, IMG_SIZE, IMG_SIZE).astype(np.float32)
+        dummy_input = np.random.rand(1, 3, img_size, img_size).astype(np.float32)
 
         start_time = datetime.now()
         outputs = sess.run(None, {inp_name: dummy_input})
@@ -208,7 +216,7 @@ def test_onnx_model(onnx_path, is_raw=False):
         print(f"   - 推論時間: {inference_time:.1f}ms")
 
         if is_raw:
-            # Raw model: multiple outputs (pred_class, pred_bbox, pred_conf)
+            # Raw model: multiple outputs
             print(f"   - 出力数: {len(outputs)}")
             for i, out in enumerate(outputs):
                 print(f"   - 出力{i}形状: {out.shape}")
@@ -220,7 +228,7 @@ def test_onnx_model(onnx_path, is_raw=False):
                 dets = apply_nms(outputs[0], outputs[1])
             print(f"   - NMS後検出数: {dets[0].shape[0]}個")
         else:
-            # Full model: single output with NMS already applied
+            # Full model: single output
             dets = outputs[0]
             print(f"   - 出力形状: {dets.shape}")
             print(f"   - 検出数: {dets.shape[0]}個")
@@ -239,6 +247,9 @@ def inference_single_image(
     sess,
     inp_name,
     img_path,
+    img_size,
+    class_names,
+    output_dir,
     is_raw=False,
     min_confidence=DEFAULT_MIN_CONFIDENCE,
     min_iou=DEFAULT_MIN_IOU,
@@ -246,13 +257,16 @@ def inference_single_image(
     save_result=True,
 ):
     """
-    単一画像でのONNX推論
+    Run inference on a single image
 
     Args:
         sess: ONNX Runtime session
         inp_name: Input tensor name
         img_path: Path to image
-        is_raw: True if model outputs raw predictions (without NMS)
+        img_size: Input image size
+        class_names: List of class names
+        output_dir: Output directory for results
+        is_raw: True if model outputs raw predictions
         min_confidence: Confidence threshold for NMS (raw mode only)
         min_iou: IoU threshold for NMS (raw mode only)
         max_bbox: Maximum number of detections (raw mode only)
@@ -261,17 +275,17 @@ def inference_single_image(
     try:
         print(f"🖼️ 推論実行: {img_path}")
 
-        # 1. 画像読み込み・前処理
+        # 1. Load and preprocess image
         pil_img = Image.open(img_path).convert("RGB")
         print(f"   - 元画像サイズ: {pil_img.size}")
 
-        img_pad, r, pad_w, pad_h = letterbox(pil_img, IMG_SIZE)
+        img_pad, r, pad_w, pad_h = letterbox(pil_img, img_size)
 
-        # 正規化 & 次元変換
+        # Normalize & transpose
         inp = np.array(img_pad, dtype=np.float32) / 255.0
         inp = inp.transpose(2, 0, 1)[None, ...]  # [1, 3, H, W]
 
-        # 2. ONNX推論
+        # 2. ONNX inference
         start_time = datetime.now()
         outputs = sess.run(None, {inp_name: inp})
         end_time = datetime.now()
@@ -306,38 +320,39 @@ def inference_single_image(
             print("   - 検出結果なし")
             return None
 
-        # 4. 結果の座標変換・描画
+        # 4. Draw bounding boxes and labels
         img_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         valid_detections = 0
 
         for det in dets:
             cls, x1, y1, x2, y2, conf = det
 
-            # 座標を元画像に戻す
+            # Transform coordinates back to original image
             xx1 = (x1 - pad_w) / r
             yy1 = (y1 - pad_h) / r
             xx2 = (x2 - pad_w) / r
             yy2 = (y2 - pad_h) / r
 
-            # 画像範囲内にクリップ
+            # Clip to image bounds
             W0, H0 = pil_img.size
             xx1 = max(min(xx1, W0 - 1), 0)
             yy1 = max(min(yy1, H0 - 1), 0)
             xx2 = max(min(xx2, W0 - 1), 0)
             yy2 = max(min(yy2, H0 - 1), 0)
 
-            # 有効な検出のみ描画
+            # Draw only valid detections
             if xx2 > xx1 and yy2 > yy1:
                 xi1, yi1, xi2, yi2 = map(int, (xx1, yy1, xx2, yy2))
 
-                # バウンディングボックス描画
+                # Draw bounding box
                 cv2.rectangle(img_bgr, (xi1, yi1), (xi2, yi2), (0, 255, 0), 2)
 
-                # ラベル描画
+                # Draw label
+                cls_idx = int(cls)
                 cls_name = (
-                    CLASS_LIST[int(cls)]
-                    if int(cls) < len(CLASS_LIST)
-                    else f"Class{int(cls)}"
+                    class_names[cls_idx]
+                    if cls_idx < len(class_names)
+                    else f"Class{cls_idx}"
                 )
                 label = f"{cls_name} {conf:.2f}"
                 cv2.putText(
@@ -353,12 +368,11 @@ def inference_single_image(
 
         print(f"   - 有効検出数: {valid_detections}個")
 
-        # 5. 結果保存
+        # 5. Save result
         if save_result:
-            out_dir = Path("outputs")
-            out_dir.mkdir(exist_ok=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
             suffix = "_raw" if is_raw else ""
-            out_path = out_dir / f"onnx_result{suffix}_{Path(img_path).stem}.jpg"
+            out_path = output_dir / f"result{suffix}_{Path(img_path).stem}.jpg"
             cv2.imwrite(str(out_path), img_bgr)
             print(f"   - 結果保存: {out_path}")
 
@@ -373,55 +387,115 @@ def inference_single_image(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="YOLOv9 ONNX推論")
+    parser = argparse.ArgumentParser(
+        description="YOLOv9 ONNX Inference",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic inference
+  python -m yolo.tools.onnx_inference --onnx model.onnx --image data/images/test.jpg --classes "person,car,dog"
+
+  # Inference on directory with custom parameters
+  python -m yolo.tools.onnx_inference -x model_raw.onnx -i data/images/ --classes "person,head" -c 0.3 --iou 0.5
+
+  # Test only (no actual inference)
+  python -m yolo.tools.onnx_inference -x model.onnx --test-only --classes "cat,dog"
+""",
+    )
+
+    parser.add_argument(
+        "--onnx",
+        "-x",
+        type=str,
+        required=True,
+        help="Path to ONNX model file",
+    )
     parser.add_argument(
         "--image",
         "-i",
-        default=DEFAULT_IMAGE_PATH,
-        help="推論対象の画像またはフォルダパス",
+        type=str,
+        required=True,
+        help="Path to image file or directory",
     )
     parser.add_argument(
-        "--model",
+        "--classes",
+        type=str,
+        required=True,
+        help='Comma-separated class names (e.g., "person,car,dog")',
+    )
+    parser.add_argument(
+        "--img-size",
+        type=int,
+        default=DEFAULT_IMG_SIZE,
+        help=f"Input image size [default: {DEFAULT_IMG_SIZE}]",
+    )
+    parser.add_argument(
+        "--output-dir",
+        "-d",
+        type=str,
+        default="outputs",
+        help="Output directory for results [default: outputs]",
+    )
+    parser.add_argument(
+        "--mode",
         "-m",
-        choices=["full", "raw"],
-        default="full",
-        help="モデルタイプ: 'full' (NMS込み) or 'raw' (NMS無し)",
+        choices=["full", "raw", "auto"],
+        default="auto",
+        help="Model type: 'full' (with NMS), 'raw' (without NMS), or 'auto' (auto-detect) [default: auto]",
     )
     parser.add_argument(
         "--confidence",
         "-c",
         type=float,
         default=DEFAULT_MIN_CONFIDENCE,
-        help="信頼度閾値 (raw mode only)",
+        help=f"Confidence threshold for NMS (raw mode only) [default: {DEFAULT_MIN_CONFIDENCE}]",
     )
     parser.add_argument(
-        "--iou", type=float, default=DEFAULT_MIN_IOU, help="IoU閾値 (raw mode only)"
+        "--iou",
+        type=float,
+        default=DEFAULT_MIN_IOU,
+        help=f"IoU threshold for NMS (raw mode only) [default: {DEFAULT_MIN_IOU}]",
     )
     parser.add_argument(
         "--max-det",
         type=int,
         default=DEFAULT_MAX_BBOX,
-        help="最大検出数 (raw mode only)",
+        help=f"Maximum number of detections (raw mode only) [default: {DEFAULT_MAX_BBOX}]",
     )
     parser.add_argument(
-        "--test-only", action="store_true", help="基本動作テストのみ実行"
+        "--test-only",
+        action="store_true",
+        help="Run model test only (no actual inference)",
     )
-    parser.add_argument("--display", action="store_true", help="結果を画面表示")
+    parser.add_argument(
+        "--display",
+        action="store_true",
+        help="Display results on screen",
+    )
 
     args = parser.parse_args()
 
-    # Determine ONNX path and mode
-    is_raw = args.model == "raw"
-    onnx_path = ONNX_RAW_PATH if is_raw else ONNX_PATH
+    # Parse class names
+    class_names = [name.strip() for name in args.classes.split(",")]
 
-    print(f"モード: {'RAW (NMS無し)' if is_raw else 'FULL (NMS込み)'}")
-    if is_raw:
+    print(f"{'='*60}")
+    print(f"YOLOv9 ONNX Inference")
+    print(f"{'='*60}")
+    print(f"ONNX Model: {args.onnx}")
+    print(f"Image: {args.image}")
+    print(f"Classes: {class_names}")
+    print(f"Image Size: {args.img_size}")
+    print(f"Mode: {args.mode}")
+    if args.mode == "raw":
         print(
-            f"NMSパラメータ: confidence={args.confidence}, iou={args.iou}, max_det={args.max_det}"
+            f"NMS Params: confidence={args.confidence}, iou={args.iou}, max_det={args.max_det}"
         )
+    print(f"Output Dir: {args.output_dir}")
+    print(f"{'='*60}\n")
 
-    # 1. 基本テスト
-    sess, inp_name, is_raw_model = test_onnx_model(onnx_path, is_raw)
+    # 1. Test model
+    mode = None if args.mode == "auto" else args.mode
+    sess, inp_name, is_raw = test_onnx_model(args.onnx, args.img_size, mode)
     if sess is None or inp_name is None:
         print("💥 ONNXモデルテスト失敗")
         return
@@ -430,24 +504,29 @@ def main():
         print("🎉 基本テスト完了")
         return
 
-    # 2. 実際の画像で推論
+    # 2. Run inference on images
     try:
         img_paths = get_image_list(args.image)
-        print(f"📸 推論対象: {len(img_paths)}枚の画像")
+        print(f"\n📸 推論対象: {len(img_paths)}枚の画像")
 
-        for img_path in img_paths[:5]:  # 最初の5枚をテスト
+        output_dir = Path(args.output_dir)
+
+        for img_path in img_paths[:5]:  # Process first 5 images
             result_img = inference_single_image(
                 sess,
                 inp_name,
                 img_path,
-                is_raw=is_raw_model,
+                args.img_size,
+                class_names,
+                output_dir,
+                is_raw=is_raw,
                 min_confidence=args.confidence,
                 min_iou=args.iou,
                 max_bbox=args.max_det,
             )
 
             if result_img is not None and args.display:
-                # 結果表示（サイズを半分に縮小）
+                # Display result (resized to half)
                 h, w = result_img.shape[:2]
                 disp = cv2.resize(
                     result_img, (w // 2, h // 2), interpolation=cv2.INTER_LINEAR
@@ -457,7 +536,7 @@ def main():
                 cv2.waitKey(0)
                 cv2.destroyAllWindows()
 
-        print("🎉 ONNX推論完了")
+        print("\n🎉 ONNX推論完了")
 
     except Exception as e:
         print(f"❌ メイン処理エラー: {e}")
